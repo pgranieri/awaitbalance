@@ -6,19 +6,22 @@ use embassy_executor::Spawner;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{AnyPin, Level, Output, Pin, Pull, Speed};
 use embassy_stm32::peripherals::{DMA2_CH2, DMA2_CH3, EXTI6, PA5, PA6, PB15, PB5, PC6, PC7, SPI1};
-use embassy_stm32::spi::Spi;
+use embassy_stm32::spi::{BitOrder, Spi, MODE_3};
 use embassy_stm32::{spi, Config};
 use embassy_stm32::time::Hertz;
 use embassy_time::Timer;
 use {defmt_rtt as _, panic_probe as _};
+
+mod imu;
+use imu::bno085::*;
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     /*
         Pin Map
         CS:     PC_7
-        SCK:    PB_3
-        MISO:   PB_4
+        SCK:    PA_5
+        MISO:   PA_6
         MOSI:   PB_5
         INT:    PC_6
         RST:    PB_15
@@ -31,8 +34,11 @@ async fn main(spawner: Spawner) {
     // Clock source for SPI1 is APB2, which is set to 60MHz
     // BNO085 has a maximum SPI clock speed of 3MHz
     // Set SPI clock divider to 32, giving a baud rate of 1.875MHz
+    // trying divider of 128, giving 468,750Hz
     let mut spi_config = spi::Config::default();
-    spi_config.frequency = Hertz(1_875_000);
+    spi_config.frequency = Hertz(468_750);
+    spi_config.mode = MODE_3; //CPOL = 1, CPHA = 1
+    spi_config.bit_order = BitOrder::LsbFirst;
 
     spawner.spawn(
         spi1_task(
@@ -120,24 +126,16 @@ async fn spi1_task(
     rst_pin: PB15,
     spi_config: spi::Config,
 ) {
-    info!("SPI1 task begin");
+    info!("[SPI] task begin");
 
-    let mut _spi = Spi::new(spi1, sck_pin, mosi_pin, miso_pin, tx_dma, rx_dma, spi_config);
+    let mut spi = Spi::new(spi1, sck_pin, mosi_pin, miso_pin, tx_dma, rx_dma, spi_config);
     let mut spi_int = ExtiInput::new(int_pin, exti6, Pull::None);
-    let mut _cs = Output::new(cs_pin, Level::High, Speed::Low);
-    let mut rst = Output::new(rst_pin, Level::High, Speed::Low);
+    let mut cs = Output::new(cs_pin, Level::High, Speed::High);
+    let mut rst = Output::new(rst_pin, Level::High, Speed::High);
 
-    /* drive the RST pin low to reset the BNO085 */
-    rst.set_low();
-    Timer::after_ticks(1).await; // 10ns minimum hold time, tick period is ~30.5us
-    rst.set_high();
+    reset_imu(&mut rst).await;
 
-    info!("Reset BNO085, waiting for interrupt...");
-
-    /* wait for BNO085 to finish resetting */
-    spi_int.wait_for_falling_edge().await; // 90ms min for response
-
-    info!("Received BNO085 interrupt!");
+    get_initial_packet(&mut spi, &mut spi_int, &mut cs).await;
 
     loop {
         Timer::after_secs(5).await;
