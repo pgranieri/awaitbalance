@@ -5,8 +5,8 @@ use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{AnyPin, Level, Output, Pin, Pull, Speed};
-use embassy_stm32::peripherals::{DMA2_CH2, DMA2_CH3, EXTI6, PA5, PA6, PB15, PB5, PC6, PC7, SPI1};
-use embassy_stm32::spi::{BitOrder, Spi, MODE_3};
+use embassy_stm32::peripherals::{DMA2_CH2, DMA2_CH3, EXTI6, PA5, PA6, PB15, PB5, PB8, PC6, SPI1};
+use embassy_stm32::spi::{Spi, MODE_3};
 use embassy_stm32::{spi, Config};
 use embassy_stm32::time::Hertz;
 use embassy_time::Timer;
@@ -19,10 +19,10 @@ use imu::bno085::*;
 async fn main(spawner: Spawner) {
     /*
         Pin Map
-        CS:     PC_7
+        CS:     PB_8
         SCK:    PA_5
-        MISO:   PA_6
-        MOSI:   PB_5
+        MISO:   PA_6 (SDA)
+        MOSI:   PB_5 (DI)
         INT:    PC_6
         RST:    PB_15
      */
@@ -38,7 +38,6 @@ async fn main(spawner: Spawner) {
     let mut spi_config = spi::Config::default();
     spi_config.frequency = Hertz(468_750);
     spi_config.mode = MODE_3; //CPOL = 1, CPHA = 1
-    spi_config.bit_order = BitOrder::LsbFirst;
 
     spawner.spawn(
         spi1_task(
@@ -48,7 +47,7 @@ async fn main(spawner: Spawner) {
             p.PA6,
             p.DMA2_CH3,
             p.DMA2_CH2,
-            p.PC7,
+            p.PB8,
             p.PC6,
             p.EXTI6,
             p.PB15,
@@ -120,7 +119,7 @@ async fn spi1_task(
     miso_pin: PA6,
     tx_dma: DMA2_CH3,
     rx_dma: DMA2_CH2,
-    cs_pin: PC7,
+    cs_pin: PB8,
     int_pin: PC6,
     exti6: EXTI6,
     rst_pin: PB15,
@@ -135,7 +134,7 @@ async fn spi1_task(
 
     reset_imu(&mut rst).await;
 
-    get_initial_packet(&mut spi, &mut spi_int, &mut cs).await;
+    get_advertisement_packet(&mut spi, &mut spi_int, &mut cs).await;
 
     loop {
         Timer::after_secs(5).await;
