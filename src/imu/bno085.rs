@@ -60,13 +60,13 @@ enum Channel {
 impl Channel {
     fn from_u8(channel_id: u8) -> Self {
         match channel_id {
-            0 => Channel::SHTPCommand,
-            1 => Channel::Device,
-            2 => Channel::Control,
-            3 => Channel::InputNormal,
-            4 => Channel::InputWake,
-            5 => Channel::InputGyroRv,
-            _ => Channel::Undefined,
+            0 => Self::SHTPCommand,
+            1 => Self::Device,
+            2 => Self::Control,
+            3 => Self::InputNormal,
+            4 => Self::InputWake,
+            5 => Self::InputGyroRv,
+            _ => Self::Undefined,
         }
     }
 }
@@ -81,9 +81,9 @@ enum SHTPCommandID {
 impl SHTPCommandID {
     fn from_u8(command_id: u8) -> Self {
         match command_id {
-            0 => SHTPCommandID::Advertisement,
-            1 => SHTPCommandID::ErrorList,
-            _ => SHTPCommandID::Undefined,
+            0 => Self::Advertisement,
+            1 => Self::ErrorList,
+            _ => Self::Undefined,
         }
     }
 }
@@ -106,21 +106,21 @@ enum SHTPTag {
 }
 
 impl SHTPTag {
-    fn from_u8(i: u8) -> SHTPTag {
+    fn from_u8(i: u8) -> Self {
         match i {
-            0       => SHTPTag::Reserved,
-            1       => SHTPTag::GUID,
-            2       => SHTPTag::MaxCargoPlusHeaderWrite,
-            3       => SHTPTag::MaxCargoPlusHeaderRead,
-            4       => SHTPTag::MaxTransferWrite,
-            5       => SHTPTag::MaxTransferRead,
-            6       => SHTPTag::NormalChannel,
-            7       => SHTPTag::WakeChannel,
-            8       => SHTPTag::AppName,
-            9       => SHTPTag::ChannelName,
-            0x80    => SHTPTag::Version,
-            0x81    => SHTPTag::ReportLengths,
-            _       => SHTPTag::Undefined,
+            0       => Self::Reserved,
+            1       => Self::GUID,
+            2       => Self::MaxCargoPlusHeaderWrite,
+            3       => Self::MaxCargoPlusHeaderRead,
+            4       => Self::MaxTransferWrite,
+            5       => Self::MaxTransferRead,
+            6       => Self::NormalChannel,
+            7       => Self::WakeChannel,
+            8       => Self::AppName,
+            9       => Self::ChannelName,
+            0x80    => Self::Version,
+            0x81    => Self::ReportLengths,
+            _       => Self::Undefined,
         }
     }
 }
