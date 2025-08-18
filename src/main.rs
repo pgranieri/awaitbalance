@@ -97,16 +97,16 @@ fn set_clock_config() -> Config {
 }
 
 #[embassy_executor::task(pool_size = 3)]
-async fn led_task(pin: AnyPin, delay: u64, name: &'static str) {
+async fn led_task(pin: AnyPin, delay: u64, _name: &'static str) {
     let mut led = Output::new(pin, Level::High, Speed::Low);
 
     loop {
         led.set_high();
-        info!("{}: LED High", name);
+        // info!("{}: LED High", name);
         Timer::after_millis(delay).await;
 
         led.set_low();
-        info!("{}: LED Low", name);
+        // info!("{}: LED Low", name);
         Timer::after_millis(delay).await;
     }
 }
@@ -134,10 +134,22 @@ async fn spi1_task(
 
     reset_imu(&mut rst).await;
 
-    get_advertisement_packet(&mut spi, &mut spi_int, &mut cs).await;
+    /* Get advertisement packet */
+    spi_int.wait_for_falling_edge().await;
+    get_shtp_response(&mut spi, &mut cs).await;
+
+    /* Get initialization command response packet */
+    spi_int.wait_for_falling_edge().await;
+    get_shtp_response(&mut spi, &mut cs).await;
+
+    /* Get device reset complete packet */
+    spi_int.wait_for_falling_edge().await;
+    get_shtp_response(&mut spi, &mut cs).await;
 
     loop {
-        Timer::after_secs(5).await;
-        info!("[SPI] It's lonely here...");
+        info!("Waiting for next packet");
+        spi_int.wait_for_falling_edge().await;
+
+        get_shtp_response(&mut spi, &mut cs).await;
     }
 }
