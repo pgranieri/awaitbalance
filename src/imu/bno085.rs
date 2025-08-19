@@ -1,4 +1,4 @@
-use embassy_stm32::{gpio::Output, mode::Async, spi::Spi};
+use embassy_stm32::{exti::ExtiInput, gpio::Output, mode::Async, spi::Spi};
 use embassy_time::Timer;
 use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
 
@@ -16,9 +16,10 @@ const CARGO_CHANNEL_INDEX: usize = 2;
 const CARGO_SEQ_NUM_INDEX: usize = 3;
 
 const COMMAND_RESPONSE_REPORT_SIZE: usize = 16;
+const BASE_TIMESTAMP_REPORT_SIZE: usize = 5;
+const GET_FEATURE_REPORT_SIZE: usize = 17;
+const SET_FEATURE_REPORT_SIZE: usize = 17;
 const ROTATION_VECTOR_REPORT_SIZE: usize = 14;
-
-const QUATERNION_SIZE: usize = 8;
 
 const Q12_SCALE: f32 = (1 << 12) as f32;
 const Q14_SCALE: f32 = (1 << 14) as f32;
@@ -33,28 +34,34 @@ struct SHTPHeader {
 }
 
 impl SHTPHeader {
-    fn from_byte_array(byte_arr: [u8; CARGO_HEADER_SIZE]) -> Self {
+    fn from_byte_array(buf: &[u8]) -> Self {
         let temp_len = u16::from_le_bytes(
-            byte_arr[0..CARGO_LEN_FIELD_SIZE].try_into().unwrap()
+            buf[0..CARGO_LEN_FIELD_SIZE].try_into().unwrap()
         );
 
         Self {
             cargo_len: (temp_len & CARGO_LENGTH_MASK) as usize,
-            channel: Channel::from_u8(byte_arr[CARGO_CHANNEL_INDEX]),
-            seq_num: byte_arr[CARGO_SEQ_NUM_INDEX] as usize,
+            channel: Channel::from_u8(buf[CARGO_CHANNEL_INDEX]),
+            seq_num: buf[CARGO_SEQ_NUM_INDEX] as usize,
         }
+    }
+
+    fn write_to_byte_array(&self, buf: &mut [u8]) {
+        buf[0..=1].copy_from_slice(&(self.cargo_len as u16).to_le_bytes());
+        buf[2] = self.channel as u8;
+        buf[3] = self.seq_num as u8;
     }
 }
 
-#[derive(Format)]
+#[derive(Format, Clone, Copy)]
 enum Channel {
-    SHTPCommand,
-    Device,
-    Control,
-    InputNormal,
-    InputWake,
-    InputGyroRv,
-    Undefined,
+    SHTPCommand = 0,
+    Device = 1,
+    Control = 2,
+    InputNormal = 3,
+    InputWake = 4,
+    InputGyroRv = 5,
+    Undefined = 255,
 }
 
 impl Channel {
@@ -126,21 +133,6 @@ impl SHTPTag {
 }
 
 #[derive(Format)]
-enum ControlID {
-    CommandResponse,
-    Undefined,
-}
-
-impl ControlID {
-    fn from_u8(id: u8) -> Self {
-        match id {
-            0xF1    => Self::CommandResponse,
-            _       => Self::Undefined,
-        }
-    }
-}
-
-#[derive(Format)]
 enum ControlCommandID {
     Initialization,
     InitializationUnsolicited,
@@ -157,22 +149,28 @@ impl ControlCommandID {
     }
 }
 
-#[derive(Format)]
+#[derive(Format, Clone, Copy)]
 enum ReportID {
-    RotationVector,
-    Undefined,
+    RotationVector = 0x05,
+    CommandResponse = 0xF1,
+    BaseTimestamp = 0xFB,
+    GetFeature = 0xFC,
+    SetFeature = 0xFD,
+    Undefined = 0xFF,
 }
 
 impl ReportID {
     fn from_u8(id: u8) -> Self {
         match id {
             0x05    => Self::RotationVector,
+            0xF1    => Self::CommandResponse,
+            0xFB    => Self::BaseTimestamp,
+            0xFC    => Self::GetFeature,
+            0xFD    => Self::SetFeature,
             _       => Self::Undefined,
         }
     }
 }
-
-
 
 #[derive(Format)]
 struct Quaternion {
@@ -191,7 +189,7 @@ fn q12_to_f32(q_val: u16) -> f32 {
 }
 
 impl Quaternion {
-    fn from_byte_array(byte_arr: [u8; QUATERNION_SIZE]) -> Self {
+    fn from_byte_array(byte_arr: &[u8]) -> Self {
         Self {
             i: u16::from_le_bytes(byte_arr[0..2].try_into().unwrap()),
             j: u16::from_le_bytes(byte_arr[2..4].try_into().unwrap()),
@@ -228,7 +226,7 @@ pub async fn get_shtp_response(spi: &mut Spi<'_, Async>, chip_select: &mut Outpu
     ).await.expect("spi read should return");
 
     let header = SHTPHeader::from_byte_array(
-        cargo_buf[0..CARGO_HEADER_SIZE].try_into().unwrap()
+        &cargo_buf[0..CARGO_HEADER_SIZE]
     );
 
     if header.cargo_len < CARGO_HEADER_SIZE || header.cargo_len > CARGO_BUFFER_SIZE {
@@ -380,12 +378,12 @@ fn process_control_response(header: SHTPHeader, cargo_buf: &[u8]) {
     let mut buf_index = CARGO_HEADER_SIZE;
 
     while buf_index < header.cargo_len {
-        let id = ControlID::from_u8(cargo_buf[buf_index]);
+        let id = ReportID::from_u8(cargo_buf[buf_index]);
 
-        info!("ControlID: {}", id);
+        info!("ReportID: {}", id);
 
         match id {
-            ControlID::CommandResponse => {
+            ReportID::CommandResponse => {
                 let seq_num = cargo_buf[buf_index + 1];
                 let mut command = cargo_buf[buf_index + 2];
                 let command_seq_num = cargo_buf[buf_index + 3];
@@ -403,8 +401,36 @@ fn process_control_response(header: SHTPHeader, cargo_buf: &[u8]) {
 
                 buf_index += COMMAND_RESPONSE_REPORT_SIZE;
             },
+            ReportID::GetFeature => {
+                let feature_report_id = ReportID::from_u8(cargo_buf[buf_index + 1]);
+                let _feature_flags = cargo_buf[buf_index + 2];
+                let _change_sensitivity = u16::from_le_bytes(
+                    cargo_buf[
+                        buf_index + 3..=buf_index + 4
+                    ].try_into().unwrap()
+                );
+                let report_interval = u32::from_le_bytes(
+                    cargo_buf[
+                        buf_index + 5..=buf_index + 8
+                    ].try_into().unwrap()
+                );
+                let _batch_interval = u32::from_le_bytes(
+                    cargo_buf[
+                        buf_index + 9..=buf_index + 12
+                    ].try_into().unwrap()
+                );
+                let _misc_config = u32::from_le_bytes(
+                    cargo_buf[
+                        buf_index + 13..=buf_index + 16
+                    ].try_into().unwrap()
+                );
+
+                info!("Feature Report: {}, Report Interval: {}us", feature_report_id, report_interval);
+
+                buf_index += GET_FEATURE_REPORT_SIZE;
+            },
             _ => {
-                error!("ControlID not implemented: {}", cargo_buf[buf_index]);
+                error!("Control Channel: ReportID not implemented: {}", cargo_buf[buf_index]);
                 buf_index = header.cargo_len;
             },
         };
@@ -425,13 +451,13 @@ fn process_report_response(header: SHTPHeader, cargo_buf: &[u8]) {
                 let status = cargo_buf[buf_index + 2];
                 let delay = cargo_buf[buf_index + 3];
                 let q = Quaternion::from_byte_array(
-                    cargo_buf[
-                        (buf_index + 4)..(buf_index + 4 + QUATERNION_SIZE)
-                    ].try_into().unwrap()
+                    &cargo_buf[
+                        buf_index + 4..=buf_index + 11
+                    ]
                 );
                 let acc = u16::from_le_bytes(
                     cargo_buf[
-                        (buf_index + 12)..(buf_index + ROTATION_VECTOR_REPORT_SIZE)
+                        buf_index + 12..=buf_index + 13
                     ].try_into().unwrap()
                 );
 
@@ -441,10 +467,89 @@ fn process_report_response(header: SHTPHeader, cargo_buf: &[u8]) {
 
                 buf_index += ROTATION_VECTOR_REPORT_SIZE;
             },
+            ReportID::BaseTimestamp => {
+                let base_delta = i32::from_le_bytes(
+                    cargo_buf[buf_index + 1..=buf_index + 4].try_into().unwrap()
+                );
+
+                info!("Batch base timestamp: {} * 100us", base_delta);
+
+                buf_index += BASE_TIMESTAMP_REPORT_SIZE;
+            },
             _ => {
                 error!("ReportID not implemented: {:#02X}", cargo_buf[buf_index]);
                 buf_index = header.cargo_len;
             }
         }
     }
+}
+
+struct SetFeatureReport {
+    report_id: ReportID,
+    feature_report_id: ReportID,
+    feature_flags: u8,
+    change_sensitivy: u16,
+    report_interval: u32, /* Enable sensor by setting positive value */
+    batch_interval: u32,
+    misc_config: u32,
+}
+
+impl SetFeatureReport {
+    fn write_to_byte_array(&self, buf: &mut [u8]) {
+        buf[0] = self.report_id as u8;
+        buf[1] = self.feature_report_id as u8;
+        buf[2] = self.feature_flags;
+        buf[3..=4].copy_from_slice(&self.change_sensitivy.to_le_bytes());
+        buf[5..=8].copy_from_slice(&self.report_interval.to_le_bytes());
+        buf[9..=12].copy_from_slice(&self.batch_interval.to_be_bytes());
+        buf[13..=16].copy_from_slice(&self.misc_config.to_le_bytes());
+    }
+}
+
+async fn set_feature_request(report: SetFeatureReport, wake: &mut Output<'_>, spi_int: &mut ExtiInput<'_>, spi: &mut Spi<'_, Async>, chip_select: &mut Output<'_>) {
+    let header = SHTPHeader {
+        cargo_len: CARGO_HEADER_SIZE + SET_FEATURE_REPORT_SIZE,
+        channel: Channel::Control,
+        seq_num: 0,
+    };
+
+    let mut cargo_buf = *CARGO_BUFFER.lock().await;
+
+    header.write_to_byte_array(
+        &mut cargo_buf[0..CARGO_HEADER_SIZE]
+    );
+
+    report.write_to_byte_array(
+        &mut cargo_buf[CARGO_HEADER_SIZE..header.cargo_len]
+    );
+
+    wake.set_low();
+    spi_int.wait_for_falling_edge().await;
+
+    chip_select.set_low();
+    Timer::after_ticks(1).await;
+    wake.set_high();
+
+    spi.write(&cargo_buf[0..header.cargo_len]).await.expect("spi write should return");
+
+    chip_select.set_high();
+}
+
+// const RELATIVE_CHANGE_SENSITIVITY_FLAG: u8 = 0x01;
+// const ENABLE_CHANGE_SENSITIVITY_FLAG: u8 = 0x02;
+// const ENABLE_WAKE_UP_FLAG: u8 = 0x04;
+// const ENABLE_ALWAYS_ON_FLAG: u8 = 0x08;
+
+pub async fn enable_rotation_vector(wake: &mut Output<'_>, spi_int: &mut ExtiInput<'_>, spi: &mut Spi<'_, Async>, chip_select: &mut Output<'_>) {
+    let report = SetFeatureReport {
+        report_id: ReportID::SetFeature,
+        feature_report_id: ReportID::RotationVector,
+        feature_flags: 0,
+        change_sensitivy: 0,
+        report_interval: 1_000_000, /* 1,000,000us -> 1Hz */
+        batch_interval: 0,
+        misc_config: 0,
+    };
+
+    set_feature_request(report, wake, spi_int, spi, chip_select).await;
 }

@@ -5,7 +5,7 @@ use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{AnyPin, Level, Output, Pin, Pull, Speed};
-use embassy_stm32::peripherals::{DMA2_CH2, DMA2_CH3, EXTI6, PA5, PA6, PB15, PB5, PB8, PC6, SPI1};
+use embassy_stm32::peripherals::{DMA2_CH2, DMA2_CH3, EXTI6, PA5, PA6, PB15, PB5, PB8, PB9, PC6, SPI1};
 use embassy_stm32::spi::{Spi, MODE_3};
 use embassy_stm32::{spi, Config};
 use embassy_stm32::time::Hertz;
@@ -51,6 +51,7 @@ async fn main(spawner: Spawner) {
             p.PC6,
             p.EXTI6,
             p.PB15,
+            p.PB9,
             spi_config
         )
     ).unwrap();
@@ -123,6 +124,7 @@ async fn spi1_task(
     int_pin: PC6,
     exti6: EXTI6,
     rst_pin: PB15,
+    wake_pin: PB9,
     spi_config: spi::Config,
 ) {
     info!("[SPI] task begin");
@@ -131,6 +133,7 @@ async fn spi1_task(
     let mut spi_int = ExtiInput::new(int_pin, exti6, Pull::None);
     let mut cs = Output::new(cs_pin, Level::High, Speed::High);
     let mut rst = Output::new(rst_pin, Level::High, Speed::High);
+    let mut wake = Output::new(wake_pin, Level::High, Speed::High);
 
     reset_imu(&mut rst).await;
 
@@ -145,6 +148,8 @@ async fn spi1_task(
     /* Get device reset complete packet */
     spi_int.wait_for_falling_edge().await;
     get_shtp_response(&mut spi, &mut cs).await;
+
+    enable_rotation_vector(&mut wake, &mut spi_int, &mut spi, &mut cs).await;
 
     loop {
         info!("Waiting for next packet");
