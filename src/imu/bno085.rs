@@ -1,6 +1,4 @@
-use embassy_stm32::{exti::ExtiInput, gpio::Output, mode::Async, spi::Spi};
 use embassy_time::Timer;
-use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
 
 use defmt::*;
 use {defmt_rtt as _, panic_probe as _};
@@ -11,6 +9,9 @@ const MAX_CARGO_SIZE: usize = 0x7FFE;
 const CARGO_BUFFER_SIZE: usize = 2048;
 
 const NUM_SHTP_CHANNELS: usize = 6;
+const SHTP_INPUT: usize = 0;
+const SHTP_OUTPUT: usize = 1;
+const SHTP_IO_SIZE: usize = 2;
 const COMMAND_RESPONSE_REPORT_SIZE: usize = 16;
 const BASE_TIMESTAMP_REPORT_SIZE: usize = 5;
 const GET_FEATURE_REPORT_SIZE: usize = 17;
@@ -19,8 +20,6 @@ const ROTATION_VECTOR_REPORT_SIZE: usize = 14;
 
 const Q12_SCALE: f32 = (1 << 12) as f32;
 const Q14_SCALE: f32 = (1 << 14) as f32;
-
-static CARGO_BUFFER: Mutex<ThreadModeRawMutex, [u8; CARGO_BUFFER_SIZE]> = Mutex::new([0; CARGO_BUFFER_SIZE]);
 
 #[derive(Format)]
 enum SHTPCommandID {
@@ -93,29 +92,6 @@ impl ControlCommandID {
     }
 }
 
-#[derive(Format, Clone, Copy)]
-enum ReportID {
-    RotationVector = 0x05,
-    CommandResponse = 0xF1,
-    BaseTimestamp = 0xFB,
-    GetFeature = 0xFC,
-    SetFeature = 0xFD,
-    Undefined = 0xFF,
-}
-
-impl ReportID {
-    fn from_u8(id: u8) -> Self {
-        match id {
-            0x05    => Self::RotationVector,
-            0xF1    => Self::CommandResponse,
-            0xFB    => Self::BaseTimestamp,
-            0xFC    => Self::GetFeature,
-            0xFD    => Self::SetFeature,
-            _       => Self::Undefined,
-        }
-    }
-}
-
 #[derive(Format)]
 struct Quaternion {
     i: u16,
@@ -152,361 +128,318 @@ impl Quaternion {
     }
 }
 
-pub struct BNO085<S: IMUInterface> {
+pub struct BNO085<S: ImuInterface> {
     interface: S,
-    channel_sequence_num: [u8; NUM_SHTP_CHANNELS],
+    seq_nums: [[u8; NUM_SHTP_CHANNELS]; SHTP_IO_SIZE],
+    cargo_buffer: [u8; CARGO_BUFFER_SIZE],
     rotation_vector: Quaternion,
 }
 
-impl<S: IMUInterface> BNO085<S> {
-    pub async fn reset_imu(&mut self) {
-        self.interface.setup().await;
-    }
-
-    pub async fn XKCD
-}
-
-pub async fn reset_imu(rst: &mut Output<'_>) {
-    rst.set_low();
-    Timer::after_ticks(1).await; // 10ns minimum hold time, tick period is ~30.5us
-    rst.set_high();
-}
-
-pub async fn get_shtp_response(spi: &mut Spi<'_, Async>, chip_select: &mut Output<'_>) {
-    chip_select.set_low();
-    Timer::after_ticks(1).await;
-
-    let mut cargo_buf = *CARGO_BUFFER.lock().await;
-
-    spi.read(
-        &mut cargo_buf[0..CARGO_HEADER_SIZE]
-    ).await.expect("spi read should return");
-
-    let header = SHTPHeader::from_byte_array(
-        &cargo_buf[0..CARGO_HEADER_SIZE]
-    );
-
-    if header.cargo_len < CARGO_HEADER_SIZE || header.cargo_len > CARGO_BUFFER_SIZE {
-        error!("Bad cargo len: {}", header.cargo_len);
-        chip_select.set_high();
-        return
-    } else {
-        info!("{}", header);
-    }
-
-    let buf_index = CARGO_HEADER_SIZE;
-
-    spi.read(
-        &mut cargo_buf[buf_index..header.cargo_len]
-    ).await.expect("spi read should return");
-
-    match header.channel {
-        Channel::SHTPCommand => {
-            process_shtp_command_response(header, &cargo_buf).await;
-        },
-        Channel::Device => {
-            process_device_response(&cargo_buf);
-        },
-        Channel::Control => {
-            process_control_response(header, &cargo_buf);
-        },
-        Channel::InputNormal => {
-            process_report_response(header, &cargo_buf);
+impl<S: ImuInterface> BNO085<S> {
+    pub fn new(interface: S) -> Self {
+        Self {
+            interface,
+            seq_nums: [[0; NUM_SHTP_CHANNELS]; SHTP_IO_SIZE],
+            cargo_buffer: [0; CARGO_BUFFER_SIZE],
+            rotation_vector: Quaternion {
+                i: 0,
+                j: 0,
+                k: 0,
+                r: 0,
+            },
         }
-        _ => error!("Channel not implemented: {}", header.channel),
-    };
-
-    chip_select.set_high();
-}
-
-async fn process_shtp_command_response(header: SHTPHeader, cargo_buf: &[u8]) {
-    let mut buf_index = CARGO_HEADER_SIZE;
-
-    let command = SHTPCommandID::from_u8(cargo_buf[buf_index]);
-
-    info!("SHTP Command: {}", command);
-
-    match command {
-        SHTPCommandID::Advertisement => {
-            buf_index += 1;
-
-            while buf_index < header.cargo_len {
-                let tag = SHTPTag::from_u8(cargo_buf[buf_index]);
-                let value_len = cargo_buf[buf_index+1] as usize;
-
-                buf_index += 2;
-                /* Give rtt time to buffer */
-                Timer::after_millis(20).await;
-
-                match tag {
-                    SHTPTag::GUID => info!(
-                        "{}: {}",
-                        tag,
-                        u32::from_le_bytes(
-                            cargo_buf[
-                                buf_index..buf_index + value_len
-                            ].try_into().unwrap()
-                        )
-                    ),
-                    SHTPTag::MaxCargoPlusHeaderWrite |
-                    SHTPTag::MaxCargoPlusHeaderRead |
-                    SHTPTag::MaxTransferWrite |
-                    SHTPTag::MaxTransferRead => info!(
-                        "{}: {}",
-                        tag,
-                        u16::from_le_bytes(
-                            cargo_buf[
-                                buf_index..buf_index + value_len
-                            ].try_into().unwrap()
-                        )
-                    ),
-                    SHTPTag::NormalChannel |
-                    SHTPTag::WakeChannel => info!(
-                        "{}: {}",
-                        tag,
-                        u8::from_le_bytes(
-                            cargo_buf[
-                                buf_index..buf_index + value_len
-                            ].try_into().unwrap()
-                        )
-                    ),
-                    SHTPTag::Version |
-                    SHTPTag::AppName |
-                    SHTPTag::ChannelName => info!(
-                        "{}: {}",
-                        tag,
-                        str::from_utf8(
-                            &cargo_buf[buf_index..buf_index + value_len]
-                        ).expect("should be name or version str")
-                    ),
-                    SHTPTag::ReportLengths => {
-                        info!("{}:", tag);
-                        for pair_offset in (0..value_len).step_by(2) {
-                            let report_id_offset = buf_index + pair_offset;
-                            let report_size_offset = report_id_offset + 1;
-                            info!(
-                                "    ReportID: {:#02X}, ReportLen: {}",
-                                cargo_buf[report_id_offset],
-                                cargo_buf[report_size_offset]
-                            );
-                            Timer::after_millis(20).await;
-                        }
-                    },
-                    SHTPTag::Reserved |
-                    SHTPTag::Undefined => {
-                        info!(
-                            "{}: Len: {}", tag, value_len,
-                        )
-                    },
-                }
-
-                buf_index += value_len;
-            }
-        },
-        SHTPCommandID::ErrorList => {
-            buf_index += 1;
-
-            if buf_index == header.cargo_len {
-                info!("No errors found!");
-                return
-            }
-
-            for err_index in buf_index..header.cargo_len {
-                error!("Error: {}", cargo_buf[err_index]);
-            }
-        },
-        SHTPCommandID::Undefined => error!("Undefined command: {}", cargo_buf[buf_index]),
-    };
-}
-
-fn process_device_response(cargo_buf: &[u8]) {
-    let buf_index = CARGO_HEADER_SIZE;
-
-    let response = cargo_buf[buf_index];
-
-    if response == 1 {
-        info!("Device reset complete");
-    } else {
-        info!("Unexpected device response: {}", response);
     }
-}
 
-fn process_control_response(header: SHTPHeader, cargo_buf: &[u8]) {
-    let mut buf_index = CARGO_HEADER_SIZE;
+    pub async fn init(&mut self) {
+        self.interface.reset().await;
 
-    while buf_index < header.cargo_len {
-        let id = ReportID::from_u8(cargo_buf[buf_index]);
+        /* consume advertisement packet */
+        self.get_shtp_response().await;
 
-        info!("ReportID: {}", id);
+        /* consume initialization command response packet */
+        self.get_shtp_response().await;
 
-        match id {
-            ReportID::CommandResponse => {
-                let seq_num = cargo_buf[buf_index + 1];
-                let mut command = cargo_buf[buf_index + 2];
-                let command_seq_num = cargo_buf[buf_index + 3];
-                let response_seq_num = cargo_buf[buf_index + 4];
-                let vals: &[u8] = &cargo_buf[buf_index + 5..COMMAND_RESPONSE_REPORT_SIZE];
+        /* consume device reset complete packet */
+        self.get_shtp_response().await;
+    }
 
-                let autonomous = (command & 0x80) != 0;
-                command = command & 0x7F;
+    pub async fn get_shtp_response(&mut self) {
+        self.interface.read(&mut self.cargo_buffer).await;
 
-                info!("    seq_num: {}, auto: {}, command: {}", seq_num, autonomous, ControlCommandID::from_u8(command));
-                info!("    command_seq_num: {}, response_seq_num: {}", command_seq_num, response_seq_num);
-                for (idx, r) in vals.iter().enumerate() {
-                        info!("    Index: {}, Byte: {:#X}", idx, r);
-                }
+        let header = SHTPHeader::from_byte_array(&self.cargo_buffer[0..CARGO_HEADER_SIZE]);
 
-                buf_index += COMMAND_RESPONSE_REPORT_SIZE;
+        match header.channel {
+            Channel::SHTPCommand => {
+                self.process_shtp_command_response(header).await;
             },
-            ReportID::GetFeature => {
-                let feature_report_id = ReportID::from_u8(cargo_buf[buf_index + 1]);
-                let _feature_flags = cargo_buf[buf_index + 2];
-                let _change_sensitivity = u16::from_le_bytes(
-                    cargo_buf[
-                        buf_index + 3..=buf_index + 4
-                    ].try_into().unwrap()
-                );
-                let report_interval = u32::from_le_bytes(
-                    cargo_buf[
-                        buf_index + 5..=buf_index + 8
-                    ].try_into().unwrap()
-                );
-                let _batch_interval = u32::from_le_bytes(
-                    cargo_buf[
-                        buf_index + 9..=buf_index + 12
-                    ].try_into().unwrap()
-                );
-                let _misc_config = u32::from_le_bytes(
-                    cargo_buf[
-                        buf_index + 13..=buf_index + 16
-                    ].try_into().unwrap()
-                );
-
-                info!("Feature Report: {}, Report Interval: {}us", feature_report_id, report_interval);
-
-                buf_index += GET_FEATURE_REPORT_SIZE;
+            Channel::Device => {
+                self.process_device_response(header);
             },
-            _ => {
-                error!("Control Channel: ReportID not implemented: {}", cargo_buf[buf_index]);
-                buf_index = header.cargo_len;
+            Channel::Control => {
+                self.process_control_response(header);
             },
+            Channel::InputNormal => {
+                self.process_report_response(header);
+            }
+            _ => error!("Channel not implemented: {}", header.channel),
         };
     }
+
+    pub async fn set_feature_request(&mut self, report: SetFeatureReport) {
+        let channel = Channel::Control;
+
+        let header = SHTPHeader {
+            cargo_len: CARGO_HEADER_SIZE + SET_FEATURE_REPORT_SIZE,
+            channel: channel,
+            seq_num: self.seq_nums[SHTP_OUTPUT][channel as usize] as usize,
+        };
+
+        self.seq_nums[SHTP_OUTPUT][channel as usize] =
+            self.seq_nums[SHTP_OUTPUT][channel as usize].wrapping_add(1);
+
+        header.write_to_byte_array(
+            &mut self.cargo_buffer[0..CARGO_HEADER_SIZE]
+        );
+
+        report.write_to_byte_array(
+            &mut self.cargo_buffer[CARGO_HEADER_SIZE..header.cargo_len]
+        );
+
+        self.interface.write(&self.cargo_buffer[0..header.cargo_len]).await;
 }
 
-fn process_report_response(header: SHTPHeader, cargo_buf: &[u8]) {
-    let mut buf_index = CARGO_HEADER_SIZE;
+    async fn process_shtp_command_response(&mut self, header: SHTPHeader) {
+        self.seq_nums[SHTP_INPUT][Channel::SHTPCommand as usize] =
+            header.seq_num as u8;
 
-    while buf_index < header.cargo_len {
-        let id = ReportID::from_u8(cargo_buf[buf_index]);
+        let mut buf_index = CARGO_HEADER_SIZE;
+        let command = SHTPCommandID::from_u8(
+            self.cargo_buffer[buf_index]
+        );
 
-        info!("ReportID: {}", id);
+        info!("SHTP Command: {}", command);
 
-        match id {
-            ReportID::RotationVector => {
-                let seq_num = cargo_buf[buf_index + 1];
-                let status = cargo_buf[buf_index + 2];
-                let delay = cargo_buf[buf_index + 3];
-                let q = Quaternion::from_byte_array(
-                    &cargo_buf[
-                        buf_index + 4..=buf_index + 11
-                    ]
-                );
-                let acc = u16::from_le_bytes(
-                    cargo_buf[
-                        buf_index + 12..=buf_index + 13
-                    ].try_into().unwrap()
-                );
+        match command {
+            SHTPCommandID::Advertisement => {
+                buf_index += 1;
 
-                info!("seq_num: {}, status: {}, delay: {}", seq_num, status, delay);
-                info!("quaternion: {}", q.to_f32());
-                info!("accuracy: {}", q12_to_f32(acc));
+                while buf_index < header.cargo_len {
+                    let tag = SHTPTag::from_u8(self.cargo_buffer[buf_index]);
+                    let value_len = self.cargo_buffer[buf_index+1] as usize;
 
-                buf_index += ROTATION_VECTOR_REPORT_SIZE;
+                    buf_index += 2;
+                    /* Give rtt time to buffer */
+                    Timer::after_millis(20).await;
+
+                    match tag {
+                        SHTPTag::GUID => info!(
+                            "{}: {}",
+                            tag,
+                            u32::from_le_bytes(
+                                self.cargo_buffer[
+                                    buf_index..buf_index + value_len
+                                ].try_into().unwrap()
+                            )
+                        ),
+                        SHTPTag::MaxCargoPlusHeaderWrite |
+                        SHTPTag::MaxCargoPlusHeaderRead |
+                        SHTPTag::MaxTransferWrite |
+                        SHTPTag::MaxTransferRead => info!(
+                            "{}: {}",
+                            tag,
+                            u16::from_le_bytes(
+                                self.cargo_buffer[
+                                    buf_index..buf_index + value_len
+                                ].try_into().unwrap()
+                            )
+                        ),
+                        SHTPTag::NormalChannel |
+                        SHTPTag::WakeChannel => info!(
+                            "{}: {}",
+                            tag,
+                            u8::from_le_bytes(
+                                self.cargo_buffer[
+                                    buf_index..buf_index + value_len
+                                ].try_into().unwrap()
+                            )
+                        ),
+                        SHTPTag::Version |
+                        SHTPTag::AppName |
+                        SHTPTag::ChannelName => info!(
+                            "{}: {}",
+                            tag,
+                            core::str::from_utf8(
+                                &self.cargo_buffer[buf_index..buf_index + value_len]
+                            ).expect("should be name or version str")
+                        ),
+                        SHTPTag::ReportLengths => {
+                            info!("{}:", tag);
+                            for pair_offset in (0..value_len).step_by(2) {
+                                let report_id_offset = buf_index + pair_offset;
+                                let report_size_offset = report_id_offset + 1;
+                                info!(
+                                    "    ReportID: {:#02X}, ReportLen: {}",
+                                    self.cargo_buffer[report_id_offset],
+                                    self.cargo_buffer[report_size_offset]
+                                );
+                                Timer::after_millis(20).await;
+                            }
+                        },
+                        SHTPTag::Reserved |
+                        SHTPTag::Undefined => {
+                            info!(
+                                "{}: Len: {}", tag, value_len,
+                            )
+                        },
+                    }
+
+                    buf_index += value_len;
+                }
             },
-            ReportID::BaseTimestamp => {
-                let base_delta = i32::from_le_bytes(
-                    cargo_buf[buf_index + 1..=buf_index + 4].try_into().unwrap()
-                );
+            SHTPCommandID::ErrorList => {
+                buf_index += 1;
 
-                info!("Batch base timestamp: {} * 100us", base_delta);
+                if buf_index == header.cargo_len {
+                    info!("No errors found!");
+                    return
+                }
 
-                buf_index += BASE_TIMESTAMP_REPORT_SIZE;
+                for err_index in buf_index..header.cargo_len {
+                    error!("Error: {}", self.cargo_buffer[err_index]);
+                }
             },
-            _ => {
-                error!("ReportID not implemented: {:#02X}", cargo_buf[buf_index]);
-                buf_index = header.cargo_len;
+            SHTPCommandID::Undefined => error!("Undefined command: {}", self.cargo_buffer[buf_index]),
+        };
+    }
+
+    fn process_device_response(&mut self, header: SHTPHeader) {
+        self.seq_nums[SHTP_INPUT][Channel::Device as usize] =
+            header.seq_num as u8;
+
+        let buf_index = CARGO_HEADER_SIZE;
+
+        let response = self.cargo_buffer[buf_index];
+
+        if response == 1 {
+            info!("Device reset complete");
+        } else {
+            error!("Unexpected device response: {}", response);
+        }
+    }
+
+    fn process_control_response(&mut self, header: SHTPHeader) {
+        self.seq_nums[SHTP_INPUT][Channel::Control as usize] =
+            header.seq_num as u8;
+
+        let mut buf_index = CARGO_HEADER_SIZE;
+
+        while buf_index < header.cargo_len {
+            let id = ReportID::from_u8(self.cargo_buffer[buf_index]);
+
+            info!("ReportID: {}", id);
+
+            match id {
+                ReportID::CommandResponse => {
+                    let seq_num = self.cargo_buffer[buf_index + 1];
+                    let mut command = self.cargo_buffer[buf_index + 2];
+                    let command_seq_num = self.cargo_buffer[buf_index + 3];
+                    let response_seq_num = self.cargo_buffer[buf_index + 4];
+                    let vals: &[u8] = &self.cargo_buffer[buf_index + 5..COMMAND_RESPONSE_REPORT_SIZE];
+
+                    let autonomous = (command & 0x80) != 0;
+                    command = command & 0x7F;
+
+                    info!("    seq_num: {}, auto: {}, command: {}", seq_num, autonomous, ControlCommandID::from_u8(command));
+                    info!("    command_seq_num: {}, response_seq_num: {}", command_seq_num, response_seq_num);
+                    for (idx, r) in vals.iter().enumerate() {
+                            info!("    Index: {}, Byte: {:#X}", idx, r);
+                    }
+
+                    buf_index += COMMAND_RESPONSE_REPORT_SIZE;
+                },
+                ReportID::GetFeature => {
+                    let feature_report_id = ReportID::from_u8(self.cargo_buffer[buf_index + 1]);
+                    let _feature_flags = self.cargo_buffer[buf_index + 2];
+                    let _change_sensitivity = u16::from_le_bytes(
+                        self.cargo_buffer[
+                            buf_index + 3..=buf_index + 4
+                        ].try_into().unwrap()
+                    );
+                    let report_interval = u32::from_le_bytes(
+                        self.cargo_buffer[
+                            buf_index + 5..=buf_index + 8
+                        ].try_into().unwrap()
+                    );
+                    let _batch_interval = u32::from_le_bytes(
+                        self.cargo_buffer[
+                            buf_index + 9..=buf_index + 12
+                        ].try_into().unwrap()
+                    );
+                    let _misc_config = u32::from_le_bytes(
+                        self.cargo_buffer[
+                            buf_index + 13..=buf_index + 16
+                        ].try_into().unwrap()
+                    );
+
+                    info!("Feature Report: {}, Report Interval: {}us", feature_report_id, report_interval);
+
+                    buf_index += GET_FEATURE_REPORT_SIZE;
+                },
+                _ => {
+                    error!("Control Channel: ReportID not implemented: {}", self.cargo_buffer[buf_index]);
+                    buf_index = header.cargo_len;
+                },
+            };
+        }
+    }
+
+    fn process_report_response(&mut self, header: SHTPHeader) {
+        self.seq_nums[SHTP_INPUT][Channel::InputNormal as usize] =
+            header.seq_num as u8;
+
+        let mut buf_index = CARGO_HEADER_SIZE;
+
+        while buf_index < header.cargo_len {
+            let id = ReportID::from_u8(self.cargo_buffer[buf_index]);
+
+            info!("ReportID: {}", id);
+
+            match id {
+                ReportID::RotationVector => {
+                    let seq_num = self.cargo_buffer[buf_index + 1];
+                    let status = self.cargo_buffer[buf_index + 2];
+                    let delay = self.cargo_buffer[buf_index + 3];
+                    self.rotation_vector = Quaternion::from_byte_array(
+                        &self.cargo_buffer[
+                            buf_index + 4..=buf_index + 11
+                        ]
+                    );
+                    let acc = u16::from_le_bytes(
+                        self.cargo_buffer[
+                            buf_index + 12..=buf_index + 13
+                        ].try_into().unwrap()
+                    );
+
+                    info!("seq_num: {}, status: {}, delay: {}", seq_num, status, delay);
+                    info!("quaternion: {}", self.rotation_vector.to_f32());
+                    info!("accuracy: {}", q12_to_f32(acc));
+
+                    buf_index += ROTATION_VECTOR_REPORT_SIZE;
+                },
+                ReportID::BaseTimestamp => {
+                    let base_delta = i32::from_le_bytes(
+                        self.cargo_buffer[buf_index + 1..=buf_index + 4].try_into().unwrap()
+                    );
+
+                    info!("Batch base timestamp: {} * 100us", base_delta);
+
+                    buf_index += BASE_TIMESTAMP_REPORT_SIZE;
+                },
+                _ => {
+                    error!("ReportID not implemented: {:#02X}", self.cargo_buffer[buf_index]);
+                    buf_index = header.cargo_len;
+                }
             }
         }
     }
-}
-
-struct SetFeatureReport {
-    report_id: ReportID,
-    feature_report_id: ReportID,
-    feature_flags: u8,
-    change_sensitivy: u16,
-    report_interval: u32, /* Enable sensor by setting positive value */
-    batch_interval: u32,
-    misc_config: u32,
-}
-
-impl SetFeatureReport {
-    fn write_to_byte_array(&self, buf: &mut [u8]) {
-        buf[0] = self.report_id as u8;
-        buf[1] = self.feature_report_id as u8;
-        buf[2] = self.feature_flags;
-        buf[3..=4].copy_from_slice(&self.change_sensitivy.to_le_bytes());
-        buf[5..=8].copy_from_slice(&self.report_interval.to_le_bytes());
-        buf[9..=12].copy_from_slice(&self.batch_interval.to_be_bytes());
-        buf[13..=16].copy_from_slice(&self.misc_config.to_le_bytes());
-    }
-}
-
-async fn set_feature_request(report: SetFeatureReport, wake: &mut Output<'_>, spi_int: &mut ExtiInput<'_>, spi: &mut Spi<'_, Async>, chip_select: &mut Output<'_>) {
-    let header = SHTPHeader {
-        cargo_len: CARGO_HEADER_SIZE + SET_FEATURE_REPORT_SIZE,
-        channel: Channel::Control,
-        seq_num: 0,
-    };
-
-    let mut cargo_buf = *CARGO_BUFFER.lock().await;
-
-    header.write_to_byte_array(
-        &mut cargo_buf[0..CARGO_HEADER_SIZE]
-    );
-
-    report.write_to_byte_array(
-        &mut cargo_buf[CARGO_HEADER_SIZE..header.cargo_len]
-    );
-
-    wake.set_low();
-    spi_int.wait_for_falling_edge().await;
-
-    chip_select.set_low();
-    Timer::after_ticks(1).await;
-    wake.set_high();
-
-    spi.write(&cargo_buf[0..header.cargo_len]).await.expect("spi write should return");
-
-    chip_select.set_high();
-}
-
-// const RELATIVE_CHANGE_SENSITIVITY_FLAG: u8 = 0x01;
-// const ENABLE_CHANGE_SENSITIVITY_FLAG: u8 = 0x02;
-// const ENABLE_WAKE_UP_FLAG: u8 = 0x04;
-// const ENABLE_ALWAYS_ON_FLAG: u8 = 0x08;
-
-pub async fn enable_rotation_vector(wake: &mut Output<'_>, spi_int: &mut ExtiInput<'_>, spi: &mut Spi<'_, Async>, chip_select: &mut Output<'_>) {
-    let report = SetFeatureReport {
-        report_id: ReportID::SetFeature,
-        feature_report_id: ReportID::RotationVector,
-        feature_flags: 0,
-        change_sensitivy: 0,
-        report_interval: 1_000_000, /* 1,000,000us -> 1Hz */
-        batch_interval: 0,
-        misc_config: 0,
-    };
-
-    set_feature_request(report, wake, spi_int, spi, chip_select).await;
 }

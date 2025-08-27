@@ -47,8 +47,8 @@ impl<'d> SPI<'d> {
     }
 }
 
-impl<'d> IMUInterface for SPI<'d> {
-    fn setup(&mut self) -> impl Future<Output =  ()> + Send {
+impl<'d> ImuInterface for SPI<'d> {
+    fn reset(&mut self) -> impl Future<Output =  ()> + Send {
         async {
             /* drive the RST pin low to reset the BNO085 */
             self.reset.set_low();
@@ -57,7 +57,7 @@ impl<'d> IMUInterface for SPI<'d> {
         }
     }
 
-    fn read(&mut self, buf: &mut [u8]) -> impl Future<Output =  usize> + Send {
+    fn read(&mut self, buf: &mut [u8]) -> impl Future<Output =  ()> + Send {
         async {
             self.host_int.wait_for_falling_edge().await;
 
@@ -69,8 +69,6 @@ impl<'d> IMUInterface for SPI<'d> {
 
             self.get_cargo_body(buf, header.cargo_len).await;
             self.chip_select.set_high();
-
-            header.cargo_len
         }
     }
 
