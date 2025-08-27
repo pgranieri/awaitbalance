@@ -1,19 +1,21 @@
 #![no_std]
 #![no_main]
 
+use awaitbalance::imu::interface::IMUInterface;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{AnyPin, Level, Output, Pin, Pull, Speed};
+use embassy_stm32::mode::Async;
 use embassy_stm32::peripherals::{DMA2_CH2, DMA2_CH3, EXTI6, PA5, PA6, PB15, PB5, PB8, PB9, PC6, SPI1};
-use embassy_stm32::spi::{Spi, MODE_3};
-use embassy_stm32::{spi, Config};
-use embassy_stm32::time::Hertz;
+use embassy_stm32::spi::Spi;
+use embassy_stm32::spi;
 use embassy_time::Timer;
+use embedded_hal_async::spi::SpiBus;
 use {defmt_rtt as _, panic_probe as _};
 
-mod imu;
-use imu::bno085::*;
+use awaitbalance::*;
+use awaitbalance::imu::*;
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -27,134 +29,77 @@ async fn main(spawner: Spawner) {
         RST:    PB_15
      */
 
-    let p = embassy_stm32::init(set_clock_config());
+    let p = embassy_stm32::init(
+       mcu::stm32f207zg::set_clock_config()
+    );
 
     info!("Hello, World!");
 
-    // Clock source for SPI1 is APB2, which is set to 60MHz
-    // BNO085 has a maximum SPI clock speed of 3MHz
-    // Set SPI clock divider to 32, giving a baud rate of 1.875MHz
-    // trying divider of 128, giving 468,750Hz
-    let mut spi_config = spi::Config::default();
-    spi_config.frequency = Hertz(468_750);
-    spi_config.mode = MODE_3; //CPOL = 1, CPHA = 1
+    let spi_config = mcu::stm32f207zg::set_spi_config();
 
-    spawner.spawn(
-        spi1_task(
-            p.SPI1,
-            p.PA5,
-            p.PB5,
-            p.PA6,
-            p.DMA2_CH3,
-            p.DMA2_CH2,
-            p.PB8,
-            p.PC6,
-            p.EXTI6,
-            p.PB15,
-            p.PB9,
-            spi_config
-        )
-    ).unwrap();
-    spawner.spawn(led_task(p.PB0.degrade(), 1000, "Green")).unwrap();
-    spawner.spawn(led_task(p.PB7.degrade(), 1010, "Blue")).unwrap();
-    spawner.spawn(led_task(p.PB14.degrade(), 1020, "Red")).unwrap();
+    let spi_bus = Spi::new(p.SPI1, p.PA5, p.PB5, p.PA6, p.DMA2_CH3, p.DMA2_CH2, spi_config);
+    let host_int = ExtiInput::new(p.PC6, p.EXTI6, Pull::None);
+    let chip_select = Output::new(p.PB8, Level::High, Speed::High);
+    let reset = Output::new(p.PB15, Level::High, Speed::High);
+    let wake = Output::new(p.PB9, Level::High, Speed::High);
+
+    let spi = mcu::spi::SPI::new(
+        spi_bus,
+        host_int,
+        chip_select,
+        reset,
+        wake,
+    );
+
+    spawner.spawn(spi1_task(spi)).unwrap();
+    // spawner.spawn(led_task(p.PB0.degrade(), 1000, "Green")).unwrap();
+    // spawner.spawn(led_task(p.PB7.degrade(), 1010, "Blue")).unwrap();
+    // spawner.spawn(led_task(p.PB14.degrade(), 1020, "Red")).unwrap();
 }
 
-fn set_clock_config() -> Config {
-    let mut config = Config::default();
+// #[embassy_executor::task(pool_size = 3)]
+// async fn led_task(pin: AnyPin, delay: u64, _name: &'static str) {
+//     let mut led = Output::new(pin, Level::High, Speed::Low);
 
-    {
-        use embassy_stm32::rcc::*;
+//     loop {
+//         led.set_high();
+//         // info!("{}: LED High", name);
+//         Timer::after_millis(delay).await;
 
-        // By default, HSE on the board comes from an 8 MHz clock signal (not a crystal) from STLink
-        config.rcc.hse = Some(Hse {
-            freq: Hertz(8_000_000),
-            mode: HseMode::Bypass,
-        });
-
-        // PLL uses HSE as the clock source
-        config.rcc.pll_src = PllSource::HSE;
-        config.rcc.pll = Some(Pll {
-            // 8 MHz clock source / 8 = 1 MHz PLL input
-            prediv: unwrap!(PllPreDiv::try_from(8)),
-            // 1 MHz PLL input * 240 = 240 MHz PLL VCO
-            mul: unwrap!(PllMul::try_from(240)),
-            // 240 MHz PLL VCO / 2 = 120 MHz main PLL output
-            divp: Some(PllPDiv::DIV2),
-            // 240 MHz PLL VCO / 5 = 48 MHz PLL48 output
-            divq: Some(PllQDiv::DIV5),
-            divr: None,
-        });
-
-        // System clock comes from PLL (= the 120 MHz main PLL output)
-        config.rcc.sys = Sysclk::PLL1_P;
-        // 120 MHz / 4 = 30 MHz APB1 frequency
-        config.rcc.apb1_pre = APBPrescaler::DIV4;
-        // 120 MHz / 2 = 60 MHz APB2 frequency
-        config.rcc.apb2_pre = APBPrescaler::DIV2;
-    }
-
-    config
-}
-
-#[embassy_executor::task(pool_size = 3)]
-async fn led_task(pin: AnyPin, delay: u64, _name: &'static str) {
-    let mut led = Output::new(pin, Level::High, Speed::Low);
-
-    loop {
-        led.set_high();
-        // info!("{}: LED High", name);
-        Timer::after_millis(delay).await;
-
-        led.set_low();
-        // info!("{}: LED Low", name);
-        Timer::after_millis(delay).await;
-    }
-}
+//         led.set_low();
+//         // info!("{}: LED Low", name);
+//         Timer::after_millis(delay).await;
+//     }
+// }
 
 #[embassy_executor::task]
 async fn spi1_task(
-    spi1: SPI1,
-    sck_pin: PA5,
-    mosi_pin: PB5,
-    miso_pin: PA6,
-    tx_dma: DMA2_CH3,
-    rx_dma: DMA2_CH2,
-    cs_pin: PB8,
-    int_pin: PC6,
-    exti6: EXTI6,
-    rst_pin: PB15,
-    wake_pin: PB9,
-    spi_config: spi::Config,
+    mut spi: mcu::spi::SPI<'static>
 ) {
     info!("[SPI] task begin");
 
-    let mut spi = Spi::new(spi1, sck_pin, mosi_pin, miso_pin, tx_dma, rx_dma, spi_config);
-    let mut spi_int = ExtiInput::new(int_pin, exti6, Pull::None);
-    let mut cs = Output::new(cs_pin, Level::High, Speed::High);
-    let mut rst = Output::new(rst_pin, Level::High, Speed::High);
-    let mut wake = Output::new(wake_pin, Level::High, Speed::High);
+    spi.setup().await;
 
-    reset_imu(&mut rst).await;
+    // bno085::reset_imu(&mut rst).await;
 
-    /* Get advertisement packet */
-    spi_int.wait_for_falling_edge().await;
-    get_shtp_response(&mut spi, &mut cs).await;
+    // /* Get advertisement packet */
+    // spi_int.wait_for_falling_edge().await;
+    // bno085::get_shtp_response(&mut spi, &mut cs).await;
 
-    /* Get initialization command response packet */
-    spi_int.wait_for_falling_edge().await;
-    get_shtp_response(&mut spi, &mut cs).await;
+    // /* Get initialization command response packet */
+    // spi_int.wait_for_falling_edge().await;
+    // bno085::get_shtp_response(&mut spi, &mut cs).await;
 
-    /* Get device reset complete packet */
-    spi_int.wait_for_falling_edge().await;
-    get_shtp_response(&mut spi, &mut cs).await;
+    // /* Get device reset complete packet */
+    // spi_int.wait_for_falling_edge().await;
+    // bno085::get_shtp_response(&mut spi, &mut cs).await;
 
-    enable_rotation_vector(&mut wake, &mut spi_int, &mut spi, &mut cs).await;
+    // bno085::enable_rotation_vector(&mut wake, &mut spi_int, &mut spi, &mut cs).await;
 
-    loop {
-        info!("Waiting for next packet");
-        spi_int.wait_for_falling_edge().await;
+    // loop {
+    //     info!("Waiting for next packet");
+    //     spi_int.wait_for_falling_edge().await;
 
-        get_shtp_response(&mut spi, &mut cs).await;
-    }
+    //     bno085::get_shtp_response(&mut spi, &mut cs).await;
+    // }
 }

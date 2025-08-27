@@ -36,8 +36,10 @@ dependencies = [
  "defmt-rtt",
  "embassy-executor",
  "embassy-stm32",
- "embassy-sync 0.7.0",
+ "embassy-sync",
  "embassy-time",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
  "panic-probe",
 ]
 
@@ -231,13 +233,14 @@ dependencies = [
 
 [[package]]
 name = "embassy-embedded-hal"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41fea5ef5bed4d3468dfd44f5c9fa4cda8f54c86d4fb4ae683eacf9d39e2ea12"
+checksum = "d1611b7a7ab5d1fbed84c338df26d56fd9bded58006ebb029075112ed2c5e039"
 dependencies = [
- "defmt 0.3.100",
+ "defmt 1.0.1",
  "embassy-futures",
- "embassy-sync 0.6.2",
+ "embassy-hal-internal",
+ "embassy-sync",
  "embassy-time",
  "embedded-hal 0.2.7",
  "embedded-hal 1.0.0",
@@ -249,22 +252,22 @@ dependencies = [
 
 [[package]]
 name = "embassy-executor"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90327bcc66333a507f89ecc4e2d911b265c45f5c9bc241f98eee076752d35ac6"
+checksum = "f102d5e04befe3ea74b6f41a0e26218740124636eb2f59e1cc215b5839b96df2"
 dependencies = [
  "cortex-m",
  "critical-section",
- "defmt 0.3.100",
+ "defmt 1.0.1",
  "document-features",
  "embassy-executor-macros",
 ]
 
 [[package]]
 name = "embassy-executor-macros"
-version = "0.6.2"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3577b1e9446f61381179a330fc5324b01d511624c55f25e3c66c9e3c626dbecf"
+checksum = "dfdddc3a04226828316bf31393b6903ee162238576b1584ee2669af215d55472"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -280,13 +283,13 @@ checksum = "1f878075b9794c1e4ac788c95b728f26aa6366d32eeb10c7051389f898f7d067"
 
 [[package]]
 name = "embassy-hal-internal"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ef3bac31ec146321248a169e9c7b5799f1e0b3829c7a9b324cb4600a7438f59"
+checksum = "95285007a91b619dc9f26ea8f55452aa6c60f7115a4edc05085cd2bd3127cd7a"
 dependencies = [
  "cortex-m",
  "critical-section",
- "defmt 0.3.100",
+ "defmt 1.0.1",
  "num-traits",
 ]
 
@@ -301,9 +304,9 @@ dependencies = [
 
 [[package]]
 name = "embassy-stm32"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1e0bb733acdddbc7097765a47ce80bde2385647cf1d8427331931e06cff9a87"
+checksum = "e2eb597acf7ecf8f8f6427ee29ce863d1ab7430e3a76e605957b7ca19e5bf8ef"
 dependencies = [
  "aligned",
  "bit_field",
@@ -313,13 +316,13 @@ dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "critical-section",
- "defmt 0.3.100",
+ "defmt 1.0.1",
  "document-features",
  "embassy-embedded-hal",
  "embassy-futures",
  "embassy-hal-internal",
  "embassy-net-driver",
- "embassy-sync 0.6.2",
+ "embassy-sync",
  "embassy-time",
  "embassy-time-driver",
  "embassy-time-queue-utils",
@@ -338,7 +341,8 @@ dependencies = [
  "nb 1.1.0",
  "proc-macro2",
  "quote",
- "rand_core",
+ "rand_core 0.6.4",
+ "rand_core 0.9.3",
  "sdio-host",
  "static_assertions",
  "stm32-fmc",
@@ -349,30 +353,16 @@ dependencies = [
 
 [[package]]
 name = "embassy-sync"
-version = "0.6.2"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d2c8cdff05a7a51ba0087489ea44b0b1d97a296ca6b1d6d1a33ea7423d34049"
+checksum = "03c372c90d3525a648684fa1c131decaf7d9ff181030db09c876fad6043443b9"
 dependencies = [
  "cfg-if",
  "critical-section",
- "defmt 0.3.100",
+ "defmt 1.0.1",
  "embedded-io-async",
+ "futures-core",
  "futures-sink",
- "futures-util",
- "heapless",
-]
-
-[[package]]
-name = "embassy-sync"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cef1a8a1ea892f9b656de0295532ac5d8067e9830d49ec75076291fd6066b136"
-dependencies = [
- "cfg-if",
- "critical-section",
- "embedded-io-async",
- "futures-sink",
- "futures-util",
  "heapless",
 ]
 
@@ -404,9 +394,9 @@ dependencies = [
 
 [[package]]
 name = "embassy-time-queue-utils"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc55c748d16908a65b166d09ce976575fb8852cf60ccd06174092b41064d8f83"
+checksum = "59b742d6fec7afcfa77c91b476520627151da3735fca6373b287c4c94b69e171"
 dependencies = [
  "embassy-executor",
  "heapless",
@@ -414,22 +404,23 @@ dependencies = [
 
 [[package]]
 name = "embassy-usb-driver"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fc247028eae04174b6635104a35b1ed336aabef4654f5e87a8f32327d231970"
+checksum = "17119855ccc2d1f7470a39756b12068454ae27a3eabb037d940b5c03d9c77b7a"
 dependencies = [
- "defmt 0.3.100",
+ "defmt 1.0.1",
+ "embedded-io-async",
 ]
 
 [[package]]
 name = "embassy-usb-synopsys-otg"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08e753b23799329780c7ac434264026d0422044d6649ed70a73441b14a6436d7"
+checksum = "79841982f857f113946b8cc0d46a69d124c523d5e4077282a608c8084ff655d9"
 dependencies = [
  "critical-section",
- "defmt 0.3.100",
- "embassy-sync 0.6.2",
+ "defmt 1.0.1",
+ "embassy-sync",
  "embassy-usb-driver",
 ]
 
@@ -671,6 +662,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 
 [[package]]
+name = "rand_core"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38"
+
+[[package]]
 name = "rustc_version"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -681,9 +678,9 @@ dependencies = [
 
 [[package]]
 name = "sdio-host"
-version = "0.5.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f93c025f9cfe4c388c328ece47d11a54a823da3b5ad0370b22d95ad47137f85a"
+checksum = "b328e2cb950eeccd55b7f55c3a963691455dcd044cfb5354f0c5e68d2c2d6ee2"
 
 [[package]]
 name = "semver"
@@ -723,12 +720,13 @@ dependencies = [
 
 [[package]]
 name = "stm32-metapac"
-version = "16.0.0"
+version = "17.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc520f60f6653a32479a95b9180b33908f0cbbdf106609465ee7dea98f4f5b37"
+checksum = "5b44329ff285800f88ccc1666218808c6ed0e6dc570383b5f661caadb8101133"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
+ "defmt 0.3.100",
 ]
 
 [[package]]

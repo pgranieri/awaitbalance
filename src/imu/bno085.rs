@@ -4,17 +4,13 @@ use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
 
 use defmt::*;
 use {defmt_rtt as _, panic_probe as _};
+use super::interface::*;
 
 #[allow(dead_code)]
-pub const MAX_CARGO_SIZE: usize = 0x7FFE;
-pub const CARGO_BUFFER_SIZE: usize = 2048;
-pub const CARGO_HEADER_SIZE: usize = 4;
-pub const CARGO_LENGTH_MASK: u16 = 0x7FFF;
+const MAX_CARGO_SIZE: usize = 0x7FFE;
+const CARGO_BUFFER_SIZE: usize = 2048;
 
-const CARGO_LEN_FIELD_SIZE: usize = 2;
-const CARGO_CHANNEL_INDEX: usize = 2;
-const CARGO_SEQ_NUM_INDEX: usize = 3;
-
+const NUM_SHTP_CHANNELS: usize = 6;
 const COMMAND_RESPONSE_REPORT_SIZE: usize = 16;
 const BASE_TIMESTAMP_REPORT_SIZE: usize = 5;
 const GET_FEATURE_REPORT_SIZE: usize = 17;
@@ -25,58 +21,6 @@ const Q12_SCALE: f32 = (1 << 12) as f32;
 const Q14_SCALE: f32 = (1 << 14) as f32;
 
 static CARGO_BUFFER: Mutex<ThreadModeRawMutex, [u8; CARGO_BUFFER_SIZE]> = Mutex::new([0; CARGO_BUFFER_SIZE]);
-
-#[derive(Format)]
-struct SHTPHeader {
-    cargo_len: usize,
-    channel: Channel,
-    seq_num: usize,
-}
-
-impl SHTPHeader {
-    fn from_byte_array(buf: &[u8]) -> Self {
-        let temp_len = u16::from_le_bytes(
-            buf[0..CARGO_LEN_FIELD_SIZE].try_into().unwrap()
-        );
-
-        Self {
-            cargo_len: (temp_len & CARGO_LENGTH_MASK) as usize,
-            channel: Channel::from_u8(buf[CARGO_CHANNEL_INDEX]),
-            seq_num: buf[CARGO_SEQ_NUM_INDEX] as usize,
-        }
-    }
-
-    fn write_to_byte_array(&self, buf: &mut [u8]) {
-        buf[0..=1].copy_from_slice(&(self.cargo_len as u16).to_le_bytes());
-        buf[2] = self.channel as u8;
-        buf[3] = self.seq_num as u8;
-    }
-}
-
-#[derive(Format, Clone, Copy)]
-enum Channel {
-    SHTPCommand = 0,
-    Device = 1,
-    Control = 2,
-    InputNormal = 3,
-    InputWake = 4,
-    InputGyroRv = 5,
-    Undefined = 255,
-}
-
-impl Channel {
-    fn from_u8(channel_id: u8) -> Self {
-        match channel_id {
-            0 => Self::SHTPCommand,
-            1 => Self::Device,
-            2 => Self::Control,
-            3 => Self::InputNormal,
-            4 => Self::InputWake,
-            5 => Self::InputGyroRv,
-            _ => Self::Undefined,
-        }
-    }
-}
 
 #[derive(Format)]
 enum SHTPCommandID {
@@ -208,8 +152,21 @@ impl Quaternion {
     }
 }
 
+pub struct BNO085<S: IMUInterface> {
+    interface: S,
+    channel_sequence_num: [u8; NUM_SHTP_CHANNELS],
+    rotation_vector: Quaternion,
+}
+
+impl<S: IMUInterface> BNO085<S> {
+    pub async fn reset_imu(&mut self) {
+        self.interface.setup().await;
+    }
+
+    pub async fn XKCD
+}
+
 pub async fn reset_imu(rst: &mut Output<'_>) {
-    /* drive the RST pin low to reset the BNO085 */
     rst.set_low();
     Timer::after_ticks(1).await; // 10ns minimum hold time, tick period is ~30.5us
     rst.set_high();
