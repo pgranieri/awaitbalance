@@ -4,6 +4,8 @@
 use {defmt_rtt as _, panic_probe as _};
 use defmt::*;
 use embassy_executor::Spawner;
+use embassy_executor::main as embassy_main;
+use embassy_executor::task as embassy_task;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{Level, Output, Pull, Speed};
 use embassy_stm32::spi::Spi as EmbassySPI;
@@ -14,7 +16,7 @@ use awaitbalance::mcu::spi::SPI as McuSpi;
 use awaitbalance::imu::bno085::*;
 use awaitbalance::imu::interface::*;
 
-#[embassy_executor::main]
+#[embassy_main]
 async fn main(spawner: Spawner) {
     /*
         Pin Map
@@ -52,13 +54,13 @@ async fn main(spawner: Spawner) {
     let blue_led = Output::new(p.PB7, Level::High, Speed::Low);
     let red_led = Output::new(p.PB14, Level::High, Speed::Low);
 
-    spawner.spawn(spi_task(spi)).unwrap();
+    spawner.spawn(imu_task(spi)).unwrap();
     spawner.spawn(led_task(green_led, 1000)).unwrap();
-    spawner.spawn(led_task(blue_led, 1000)).unwrap();
-    spawner.spawn(led_task(red_led, 1000)).unwrap();
+    spawner.spawn(led_task(blue_led, 1010)).unwrap();
+    spawner.spawn(led_task(red_led, 1020)).unwrap();
 }
 
-#[embassy_executor::task(pool_size = 3)]
+#[embassy_task(pool_size = 3)]
 async fn led_task(mut led: Output<'static>, delay: u64) {
     loop {
         Timer::after_millis(delay).await;
@@ -66,11 +68,11 @@ async fn led_task(mut led: Output<'static>, delay: u64) {
     }
 }
 
-#[embassy_executor::task]
-async fn spi_task(
+#[embassy_task]
+async fn imu_task(
     spi: McuSpi<'static>
 ) {
-    info!("[SPI] task begin");
+    info!("[IMU] task begin");
 
     let mut imu = BNO085::new(spi);
 
