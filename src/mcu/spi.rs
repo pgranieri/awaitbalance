@@ -31,9 +31,7 @@ impl<'d> SPI<'d> {
 
         spi
     }
-}
 
-impl<'d> SPI<'d> {
     async fn get_shtp_header(&mut self, buf: &mut [u8]) {
         self.spi_bus.read(
             &mut buf[0..CARGO_HEADER_SIZE]

@@ -46,10 +46,9 @@ pub fn set_clock_config() -> Config {
 /// Clock source for SPI1 is APB2, which is set to 60MHz
 /// BNO085 has a maximum SPI clock speed of 3MHz
 /// Set SPI clock divider to 32, giving a baud rate of 1.875MHz
-/// trying divider of 128, giving 468,750Hz
 pub fn set_spi_config() -> embassy_stm32::spi::Config {
     let mut spi_config = embassy_stm32::spi::Config::default();
-    spi_config.frequency = Hertz(468_750); //Hertz(468_750);
-    spi_config.mode = MODE_3; //CPOL = 1, CPHA = 1
+    spi_config.frequency = Hertz(1_875_000);
+    spi_config.mode = MODE_3; // CPOL = 1, CPHA = 1
     spi_config
 }
