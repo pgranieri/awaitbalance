@@ -186,6 +186,8 @@ impl<S: ImuInterface> BNO085<S> {
     }
 
     pub async fn set_feature_request(&mut self, report: SetFeatureReport) {
+        info!("Set Feature Request: {}", report.feature_report_id);
+
         let channel = Channel::Control;
 
         let header = SHTPHeader {

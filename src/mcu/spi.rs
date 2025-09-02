@@ -82,6 +82,8 @@ impl<'d> ImuInterface for SPI<'d> {
             self.wake.set_high();
 
             self.spi_bus.write(buf).await.expect("spi cargo write should succeed");
+
+            self.chip_select.set_high();
         }
     }
 }
