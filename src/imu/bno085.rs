@@ -18,9 +18,6 @@ const GET_FEATURE_REPORT_SIZE: usize = 17;
 const SET_FEATURE_REPORT_SIZE: usize = 17;
 const ROTATION_VECTOR_REPORT_SIZE: usize = 14;
 
-const Q12_SCALE: f32 = (1 << 12) as f32;
-const Q14_SCALE: f32 = (1 << 14) as f32;
-
 #[derive(Format)]
 enum SHTPCommandID {
     Advertisement,
@@ -94,36 +91,32 @@ impl ControlCommandID {
 
 #[derive(Format)]
 struct Quaternion {
-    i: u16,
-    j: u16,
-    k: u16,
-    r: u16,
+    i: i16,
+    j: i16,
+    k: i16,
+    r: i16,
 }
 
-fn q14_to_f32(q_val: u16) -> f32 {
-    f32::from(q_val) / Q14_SCALE
-}
-
-fn q12_to_f32(q_val: u16) -> f32 {
-    f32::from(q_val) / Q12_SCALE
+fn q_to_f32(q_val: i16, fractional_bits: i16) -> f32 {
+    f32::from(q_val) / ((1 << fractional_bits) as f32)
 }
 
 impl Quaternion {
     fn from_byte_array(byte_arr: &[u8]) -> Self {
         Self {
-            i: u16::from_le_bytes(byte_arr[0..2].try_into().unwrap()),
-            j: u16::from_le_bytes(byte_arr[2..4].try_into().unwrap()),
-            k: u16::from_le_bytes(byte_arr[4..6].try_into().unwrap()),
-            r: u16::from_le_bytes(byte_arr[6..8].try_into().unwrap()),
+            i: i16::from_le_bytes(byte_arr[0..2].try_into().unwrap()),
+            j: i16::from_le_bytes(byte_arr[2..4].try_into().unwrap()),
+            k: i16::from_le_bytes(byte_arr[4..6].try_into().unwrap()),
+            r: i16::from_le_bytes(byte_arr[6..8].try_into().unwrap()),
         }
     }
 
     fn to_f32(&self) -> [f32; 4] {
         [
-            q14_to_f32(self.i),
-            q14_to_f32(self.j),
-            q14_to_f32(self.k),
-            q14_to_f32(self.r),
+            q_to_f32(self.i, 14),
+            q_to_f32(self.j, 14),
+            q_to_f32(self.k, 14),
+            q_to_f32(self.r, 14),
         ]
     }
 }
@@ -416,7 +409,7 @@ impl<S: ImuInterface> BNO085<S> {
                             buf_index + 4..=buf_index + 11
                         ]
                     );
-                    let acc = u16::from_le_bytes(
+                    let acc = i16::from_le_bytes(
                         self.cargo_buffer[
                             buf_index + 12..=buf_index + 13
                         ].try_into().unwrap()
@@ -424,7 +417,7 @@ impl<S: ImuInterface> BNO085<S> {
 
                     info!("seq_num: {}, status: {}, delay: {}", seq_num, status, delay);
                     info!("quaternion: {}", self.rotation_vector.to_f32());
-                    info!("accuracy: {}", q12_to_f32(acc));
+                    info!("accuracy: {}", q_to_f32(acc, 12));
 
                     buf_index += ROTATION_VECTOR_REPORT_SIZE;
                 },
