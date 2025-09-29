@@ -37,6 +37,7 @@ dependencies = [
  "embassy-executor",
  "embassy-stm32",
  "embassy-time",
+ "libm",
  "panic-probe",
 ]
 
@@ -249,9 +250,9 @@ dependencies = [
 
 [[package]]
 name = "embassy-executor"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0c80c92a31c7f6b02a938f10feea17ea3cc0e8d33bcac7f3fe8cede3723bb56"
+checksum = "06070468370195e0e86f241c8e5004356d696590a678d47d6676795b2e439c6b"
 dependencies = [
  "cortex-m",
  "critical-section",
@@ -566,6 +567,12 @@ name = "ident_case"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
+
+[[package]]
+name = "libm"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9fbbcab51052fe104eb5e5d351cf728d30a5be1fe14d9be8a3b097481fb97de"
 
 [[package]]
 name = "litrs"

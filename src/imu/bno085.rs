@@ -1,3 +1,6 @@
+use core::f32::consts::PI;
+use libm;
+
 use embassy_time::Timer;
 
 use defmt::*;
@@ -89,6 +92,23 @@ impl ControlCommandID {
     }
 }
 
+#[derive(Format, Default)]
+struct EulerAngles {
+    roll: f32,
+    pitch: f32,
+    yaw: f32,
+}
+
+impl EulerAngles {
+    fn to_deg(&mut self) -> &mut Self {
+        self.roll = self.roll * 180.0 / PI;
+        self.pitch = self.pitch * 180.0 / PI;
+        self.yaw = self.yaw * 180.0 / PI;
+
+        self
+    }
+}
+
 #[derive(Format)]
 struct Quaternion {
     i: i16,
@@ -111,13 +131,35 @@ impl Quaternion {
         }
     }
 
-    fn to_f32(&self) -> [f32; 4] {
-        [
+    fn to_f32(&self) -> (f32, f32, f32, f32) {
+        (
             q_to_f32(self.i, 14),
             q_to_f32(self.j, 14),
             q_to_f32(self.k, 14),
             q_to_f32(self.r, 14),
-        ]
+        )
+    }
+
+    // source: https://en.wikipedia.org/wiki/Conversion_between_quaternions_and_Euler_angles#Source_code_2
+    fn to_euler_rad(&self) -> EulerAngles {
+        let mut euler: EulerAngles = EulerAngles::default();
+
+        let (x, y, z, w) = self.to_f32();
+
+        let sinr_cosp: f32 = 2.0 * (w * x + y * z);
+        let cosr_cosp: f32 = 1.0 - 2.0 * (x * x + y * y);
+        euler.roll = libm::atan2f(sinr_cosp, cosr_cosp);
+
+        let sinp: f32 = libm::sqrtf(1.0 + 2.0 * (w * y - x * z));
+        let cosp: f32 = libm::sqrtf(1.0 - 2.0 * (w * y - x * z));
+        euler.pitch = 2.0 * libm::atan2f(sinp, cosp) - PI / 2.0;
+
+
+        let siny_cosp: f32 = 2.0 * (w * z + x * y);
+        let cosy_cosp: f32 = 1.0 - 2.0 * (y * y + z * z);
+        euler.yaw = libm::atan2f(siny_cosp, cosy_cosp);
+
+        euler
     }
 }
 
@@ -416,7 +458,7 @@ impl<S: ImuInterface> BNO085<S> {
                     );
 
                     info!("seq_num: {}, status: {}, delay: {}", seq_num, status, delay);
-                    info!("quaternion: {}", self.rotation_vector.to_f32());
+                    info!("Angles: {}", self.rotation_vector.to_euler_rad().to_deg());
                     info!("accuracy: {}", q_to_f32(acc, 12));
 
                     buf_index += ROTATION_VECTOR_REPORT_SIZE;
