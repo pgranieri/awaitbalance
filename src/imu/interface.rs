@@ -1,10 +1,83 @@
 use defmt::*;
 
+use core::f32::consts::PI;
+use libm;
+
 pub const CARGO_HEADER_SIZE: usize = 4;
 pub const CARGO_LEN_FIELD_SIZE: usize = 2;
 pub const CARGO_LENGTH_MASK: u16 = 0x7FFF;
 pub const CARGO_CHANNEL_INDEX: usize = 2;
 pub const CARGO_SEQ_NUM_INDEX: usize = 3;
+
+
+#[derive(Format, Default)]
+pub struct EulerAngles {
+    pub roll: f32,
+    pub pitch: f32,
+    pub yaw: f32,
+}
+
+impl EulerAngles {
+    pub fn to_deg(&mut self) {
+        self.roll = self.roll * 180.0 / PI;
+        self.pitch = self.pitch * 180.0 / PI;
+        self.yaw = self.yaw * 180.0 / PI;
+    }
+}
+
+#[derive(Format, Clone, Copy, Default)]
+pub struct Quaternion {
+    pub i: i16,
+    pub j: i16,
+    pub k: i16,
+    pub r: i16,
+}
+
+pub fn q_to_f32(q_val: i16, fractional_bits: i16) -> f32 {
+    f32::from(q_val) / ((1 << fractional_bits) as f32)
+}
+
+impl Quaternion {
+    pub fn from_byte_array(byte_arr: &[u8]) -> Self {
+        Self {
+            i: i16::from_le_bytes(byte_arr[0..2].try_into().unwrap()),
+            j: i16::from_le_bytes(byte_arr[2..4].try_into().unwrap()),
+            k: i16::from_le_bytes(byte_arr[4..6].try_into().unwrap()),
+            r: i16::from_le_bytes(byte_arr[6..8].try_into().unwrap()),
+        }
+    }
+
+    pub fn to_f32(&self) -> (f32, f32, f32, f32) {
+        (
+            q_to_f32(self.i, 14),
+            q_to_f32(self.j, 14),
+            q_to_f32(self.k, 14),
+            q_to_f32(self.r, 14),
+        )
+    }
+
+    // source: https://en.wikipedia.org/wiki/Conversion_between_quaternions_and_Euler_angles#Source_code_2
+    pub fn to_euler_rad(&self) -> EulerAngles {
+        let mut euler: EulerAngles = EulerAngles::default();
+
+        let (x, y, z, w) = self.to_f32();
+
+        let sinr_cosp: f32 = 2.0 * (w * x + y * z);
+        let cosr_cosp: f32 = 1.0 - 2.0 * (x * x + y * y);
+        euler.roll = libm::atan2f(sinr_cosp, cosr_cosp);
+
+        let sinp: f32 = libm::sqrtf(1.0 + 2.0 * (w * y - x * z));
+        let cosp: f32 = libm::sqrtf(1.0 - 2.0 * (w * y - x * z));
+        euler.pitch = 2.0 * libm::atan2f(sinp, cosp) - PI / 2.0;
+
+
+        let siny_cosp: f32 = 2.0 * (w * z + x * y);
+        let cosy_cosp: f32 = 1.0 - 2.0 * (y * y + z * z);
+        euler.yaw = libm::atan2f(siny_cosp, cosy_cosp);
+
+        euler
+    }
+}
 
 pub trait ImuInterface {
     fn reset(&mut self) -> impl Future<Output =  ()> + Send;

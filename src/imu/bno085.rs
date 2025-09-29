@@ -1,6 +1,3 @@
-use core::f32::consts::PI;
-use libm;
-
 use embassy_time::Timer;
 
 use defmt::*;
@@ -92,82 +89,13 @@ impl ControlCommandID {
     }
 }
 
-#[derive(Format, Default)]
-struct EulerAngles {
-    roll: f32,
-    pitch: f32,
-    yaw: f32,
-}
-
-impl EulerAngles {
-    fn to_deg(&mut self) -> &mut Self {
-        self.roll = self.roll * 180.0 / PI;
-        self.pitch = self.pitch * 180.0 / PI;
-        self.yaw = self.yaw * 180.0 / PI;
-
-        self
-    }
-}
-
-#[derive(Format)]
-struct Quaternion {
-    i: i16,
-    j: i16,
-    k: i16,
-    r: i16,
-}
-
-fn q_to_f32(q_val: i16, fractional_bits: i16) -> f32 {
-    f32::from(q_val) / ((1 << fractional_bits) as f32)
-}
-
-impl Quaternion {
-    fn from_byte_array(byte_arr: &[u8]) -> Self {
-        Self {
-            i: i16::from_le_bytes(byte_arr[0..2].try_into().unwrap()),
-            j: i16::from_le_bytes(byte_arr[2..4].try_into().unwrap()),
-            k: i16::from_le_bytes(byte_arr[4..6].try_into().unwrap()),
-            r: i16::from_le_bytes(byte_arr[6..8].try_into().unwrap()),
-        }
-    }
-
-    fn to_f32(&self) -> (f32, f32, f32, f32) {
-        (
-            q_to_f32(self.i, 14),
-            q_to_f32(self.j, 14),
-            q_to_f32(self.k, 14),
-            q_to_f32(self.r, 14),
-        )
-    }
-
-    // source: https://en.wikipedia.org/wiki/Conversion_between_quaternions_and_Euler_angles#Source_code_2
-    fn to_euler_rad(&self) -> EulerAngles {
-        let mut euler: EulerAngles = EulerAngles::default();
-
-        let (x, y, z, w) = self.to_f32();
-
-        let sinr_cosp: f32 = 2.0 * (w * x + y * z);
-        let cosr_cosp: f32 = 1.0 - 2.0 * (x * x + y * y);
-        euler.roll = libm::atan2f(sinr_cosp, cosr_cosp);
-
-        let sinp: f32 = libm::sqrtf(1.0 + 2.0 * (w * y - x * z));
-        let cosp: f32 = libm::sqrtf(1.0 - 2.0 * (w * y - x * z));
-        euler.pitch = 2.0 * libm::atan2f(sinp, cosp) - PI / 2.0;
-
-
-        let siny_cosp: f32 = 2.0 * (w * z + x * y);
-        let cosy_cosp: f32 = 1.0 - 2.0 * (y * y + z * z);
-        euler.yaw = libm::atan2f(siny_cosp, cosy_cosp);
-
-        euler
-    }
-}
 
 pub struct BNO085<S: ImuInterface> {
     interface: S,
     seq_nums: [[u8; NUM_SHTP_CHANNELS]; SHTP_IO_SIZE],
     cargo_buffer: [u8; CARGO_BUFFER_SIZE],
     rotation_vector: Quaternion,
+    rotation_vector_cb: Option<fn(Quaternion)>
 }
 
 impl<S: ImuInterface> BNO085<S> {
@@ -176,12 +104,8 @@ impl<S: ImuInterface> BNO085<S> {
             interface,
             seq_nums: [[0; NUM_SHTP_CHANNELS]; SHTP_IO_SIZE],
             cargo_buffer: [0; CARGO_BUFFER_SIZE],
-            rotation_vector: Quaternion {
-                i: 0,
-                j: 0,
-                k: 0,
-                r: 0,
-            },
+            rotation_vector: Quaternion::default(),
+            rotation_vector_cb: None,
         }
     }
 
@@ -220,8 +144,10 @@ impl<S: ImuInterface> BNO085<S> {
         };
     }
 
-    pub async fn set_feature_request(&mut self, report: SetFeatureReport) {
-        info!("Set Feature Request: {}", report.feature_report_id);
+    pub async fn set_feature_request(&mut self, report: SetFeatureReport, callback: fn(Quaternion)) {
+        debug!("Set Feature Request: {}", report.feature_report_id);
+
+        self.rotation_vector_cb = Some(callback);
 
         let channel = Channel::Control;
 
@@ -254,7 +180,7 @@ impl<S: ImuInterface> BNO085<S> {
             self.cargo_buffer[buf_index]
         );
 
-        info!("SHTP Command: {}", command);
+        debug!("SHTP Command: {}", command);
 
         match command {
             SHTPCommandID::Advertisement => {
@@ -269,7 +195,7 @@ impl<S: ImuInterface> BNO085<S> {
                     Timer::after_millis(20).await;
 
                     match tag {
-                        SHTPTag::GUID => info!(
+                        SHTPTag::GUID => debug!(
                             "{}: {}",
                             tag,
                             u32::from_le_bytes(
@@ -281,7 +207,7 @@ impl<S: ImuInterface> BNO085<S> {
                         SHTPTag::MaxCargoPlusHeaderWrite |
                         SHTPTag::MaxCargoPlusHeaderRead |
                         SHTPTag::MaxTransferWrite |
-                        SHTPTag::MaxTransferRead => info!(
+                        SHTPTag::MaxTransferRead => debug!(
                             "{}: {}",
                             tag,
                             u16::from_le_bytes(
@@ -291,7 +217,7 @@ impl<S: ImuInterface> BNO085<S> {
                             )
                         ),
                         SHTPTag::NormalChannel |
-                        SHTPTag::WakeChannel => info!(
+                        SHTPTag::WakeChannel => debug!(
                             "{}: {}",
                             tag,
                             u8::from_le_bytes(
@@ -302,7 +228,7 @@ impl<S: ImuInterface> BNO085<S> {
                         ),
                         SHTPTag::Version |
                         SHTPTag::AppName |
-                        SHTPTag::ChannelName => info!(
+                        SHTPTag::ChannelName => debug!(
                             "{}: {}",
                             tag,
                             core::str::from_utf8(
@@ -310,11 +236,11 @@ impl<S: ImuInterface> BNO085<S> {
                             ).expect("should be name or version str")
                         ),
                         SHTPTag::ReportLengths => {
-                            info!("{}:", tag);
+                            debug!("{}:", tag);
                             for pair_offset in (0..value_len).step_by(2) {
                                 let report_id_offset = buf_index + pair_offset;
                                 let report_size_offset = report_id_offset + 1;
-                                info!(
+                                debug!(
                                     "    ReportID: {:#02X}, ReportLen: {}",
                                     self.cargo_buffer[report_id_offset],
                                     self.cargo_buffer[report_size_offset]
@@ -324,7 +250,7 @@ impl<S: ImuInterface> BNO085<S> {
                         },
                         SHTPTag::Reserved |
                         SHTPTag::Undefined => {
-                            info!(
+                            debug!(
                                 "{}: Len: {}", tag, value_len,
                             )
                         },
@@ -337,7 +263,7 @@ impl<S: ImuInterface> BNO085<S> {
                 buf_index += 1;
 
                 if buf_index == header.cargo_len {
-                    info!("No errors found!");
+                    debug!("No errors found!");
                     return
                 }
 
@@ -373,7 +299,7 @@ impl<S: ImuInterface> BNO085<S> {
         while buf_index < header.cargo_len {
             let id = ReportID::from_u8(self.cargo_buffer[buf_index]);
 
-            info!("ReportID: {}", id);
+            debug!("ReportID: {}", id);
 
             match id {
                 ReportID::CommandResponse => {
@@ -386,10 +312,10 @@ impl<S: ImuInterface> BNO085<S> {
                     let autonomous = (command & 0x80) != 0;
                     command = command & 0x7F;
 
-                    info!("    seq_num: {}, auto: {}, command: {}", seq_num, autonomous, ControlCommandID::from_u8(command));
-                    info!("    command_seq_num: {}, response_seq_num: {}", command_seq_num, response_seq_num);
+                    debug!("    seq_num: {}, auto: {}, command: {}", seq_num, autonomous, ControlCommandID::from_u8(command));
+                    debug!("    command_seq_num: {}, response_seq_num: {}", command_seq_num, response_seq_num);
                     for (idx, r) in vals.iter().enumerate() {
-                            info!("    Index: {}, Byte: {:#X}", idx, r);
+                            debug!("    Index: {}, Byte: {:#X}", idx, r);
                     }
 
                     buf_index += COMMAND_RESPONSE_REPORT_SIZE;
@@ -439,7 +365,7 @@ impl<S: ImuInterface> BNO085<S> {
         while buf_index < header.cargo_len {
             let id = ReportID::from_u8(self.cargo_buffer[buf_index]);
 
-            info!("ReportID: {}", id);
+            debug!("ReportID: {}", id);
 
             match id {
                 ReportID::RotationVector => {
@@ -457,9 +383,11 @@ impl<S: ImuInterface> BNO085<S> {
                         ].try_into().unwrap()
                     );
 
-                    info!("seq_num: {}, status: {}, delay: {}", seq_num, status, delay);
-                    info!("Angles: {}", self.rotation_vector.to_euler_rad().to_deg());
-                    info!("accuracy: {}", q_to_f32(acc, 12));
+                    debug!("seq_num: {}, status: {}, delay: {}, acc: {}", seq_num, status, delay, q_to_f32(acc, 12));
+
+                    if let Some(callback) = self.rotation_vector_cb {
+                        callback(self.rotation_vector);
+                    }
 
                     buf_index += ROTATION_VECTOR_REPORT_SIZE;
                 },
@@ -468,7 +396,7 @@ impl<S: ImuInterface> BNO085<S> {
                         self.cargo_buffer[buf_index + 1..=buf_index + 4].try_into().unwrap()
                     );
 
-                    info!("Batch base timestamp: {} * 100us", base_delta);
+                    debug!("Batch base timestamp: {} * 100us", base_delta);
 
                     buf_index += BASE_TIMESTAMP_REPORT_SIZE;
                 },

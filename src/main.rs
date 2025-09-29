@@ -9,12 +9,16 @@ use embassy_executor::task as embassy_task;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{Level, Output, Pull, Speed};
 use embassy_stm32::spi::Spi as EmbassySPI;
+use embassy_sync::signal::Signal;
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_time::Timer;
 
 use awaitbalance::mcu::stm32f207zg;
 use awaitbalance::mcu::spi::SPI as McuSpi;
 use awaitbalance::imu::bno085::*;
 use awaitbalance::imu::interface::*;
+
+static ROTATION_VECTOR_SINGAL: Signal<ThreadModeRawMutex, Quaternion> = Signal::new();
 
 #[embassy_main]
 async fn main(spawner: Spawner) {
@@ -55,6 +59,7 @@ async fn main(spawner: Spawner) {
     let red_led = Output::new(p.PB14, Level::High, Speed::Low);
 
     spawner.spawn(imu_task(spi)).unwrap();
+    spawner.spawn(pid_task()).unwrap();
     spawner.spawn(led_task(green_led, 1000)).unwrap();
     spawner.spawn(led_task(blue_led, 1010)).unwrap();
     spawner.spawn(led_task(red_led, 1020)).unwrap();
@@ -66,6 +71,22 @@ async fn led_task(mut led: Output<'static>, delay: u64) {
         Timer::after_millis(delay).await;
         led.toggle();
     }
+}
+
+#[embassy_task]
+async fn pid_task() {
+    loop {
+        let q = ROTATION_VECTOR_SINGAL.wait().await;
+
+        let mut euler = q.to_euler_rad();
+        euler.to_deg();
+
+        info!("[PID] Roll: {}, Pitch: {}, Yaw: {}", euler.roll, euler.pitch, euler.yaw);
+    }
+}
+
+fn signal_quaternion(q: Quaternion) {
+    ROTATION_VECTOR_SINGAL.signal(q);
 }
 
 #[embassy_task]
@@ -83,12 +104,12 @@ async fn imu_task(
         feature_report_id: ReportID::RotationVector,
         feature_flags: 0,
         change_sensitivy: 0,
-        report_interval: 1_000_000, /* 1,000,000us -> 1Hz */
+        report_interval: 2_500, /* 2,500us -> 400Hz */
         batch_interval: 0,
         misc_config: 0,
     };
 
-    imu.set_feature_request(report).await;
+    imu.set_feature_request(report, signal_quaternion).await;
 
     loop {
         imu.get_shtp_response().await;
